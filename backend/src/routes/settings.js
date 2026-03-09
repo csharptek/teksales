@@ -1,49 +1,37 @@
 const express = require("express");
-const router = express.Router();
+const router  = express.Router();
 const { pool } = require("../db");
 
-// ── Helper: read all settings from DB into a plain object ──────────────────
 async function getSettingsFromDB() {
   const result = await pool.query("SELECT key, value FROM settings");
-  const settings = {};
-  for (const row of result.rows) {
-    settings[row.key] = row.value;
-  }
-  return settings;
+  const s = {};
+  for (const row of result.rows) s[row.key] = row.value;
+  return s;
 }
 
-// ── Helper: upsert a single key/value ─────────────────────────────────────
 async function upsertSetting(key, value) {
   await pool.query(
-    `INSERT INTO settings (key, value, updated_at)
-     VALUES ($1, $2, NOW())
+    `INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW())
      ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
     [key, value]
   );
 }
 
-// ── GET /api/settings — return all settings (mask sensitive keys) ──────────
+// GET /api/settings — return all (mask secrets)
 router.get("/", async (req, res) => {
   try {
     const settings = await getSettingsFromDB();
-
-    // Mask sensitive fields before sending to frontend
     const masked = { ...settings };
-    const sensitiveKeys = ["azureKey", "azureSearchKey", "azureStorageConnection", "jwtSecret"];
-    for (const key of sensitiveKeys) {
-      if (masked[key]) {
-        masked[key] = "••••••••••••••••"; // mask, but signal it is saved
-      }
+    for (const key of ["azureKey","azureSearchKey","azureStorageConnection"]) {
+      if (masked[key]) masked[key] = "••••••••••••••••";
     }
-
     res.json({ success: true, settings: masked });
   } catch (err) {
-    console.error("GET /settings error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// ── POST /api/settings — save all settings to DB ──────────────────────────
+// POST /api/settings — save to DB
 router.post("/", async (req, res) => {
   try {
     const {
@@ -53,67 +41,48 @@ router.post("/", async (req, res) => {
       azureStorageConnection, azureStorageContainer,
     } = req.body;
 
-    const fields = {
-      companyName, companyTagline,
-      azureEndpoint, azureDeployment, azureApiVersion,
-      azureSearchEndpoint, azureSearchIndex, azureStorageContainer,
+    // Non-sensitive — always save
+    const plain = {
+      companyName, companyTagline, azureEndpoint, azureDeployment,
+      azureApiVersion, azureSearchEndpoint, azureSearchIndex, azureStorageContainer,
     };
-
-    // Save non-sensitive fields always
-    for (const [key, value] of Object.entries(fields)) {
-      if (value !== undefined) {
-        await upsertSetting(key, value || "");
-      }
+    for (const [key, value] of Object.entries(plain)) {
+      if (value !== undefined) await upsertSetting(key, value || "");
     }
 
-    // Only save sensitive fields if they are NOT masked (i.e. user actually typed a new value)
-    const sensitiveFields = { azureKey, azureSearchKey, azureStorageConnection };
-    for (const [key, value] of Object.entries(sensitiveFields)) {
-      if (value && value !== "••••••••••••••••") {
-        await upsertSetting(key, value);
-      }
+    // Sensitive — only save if user typed a new value (not masked placeholder)
+    for (const [key, value] of Object.entries({ azureKey, azureSearchKey, azureStorageConnection })) {
+      if (value && value !== "••••••••••••••••") await upsertSetting(key, value);
     }
 
     res.json({ success: true, message: "Settings saved successfully" });
   } catch (err) {
-    console.error("POST /settings error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// ── POST /api/settings/test — test Azure OpenAI from server side ───────────
+// POST /api/settings/test — server reads from DB and calls Azure (no CORS)
 router.post("/test", async (req, res) => {
   try {
-    // Always read credentials from DB — never trust what frontend sends
-    const settings = await getSettingsFromDB();
+    const s = await getSettingsFromDB();
 
-    const endpoint = settings.azureEndpoint;
-    const apiKey   = settings.azureKey;
-    const deploy   = settings.azureDeployment;
-    const version  = settings.azureApiVersion;
-
-    if (!endpoint || !apiKey || !deploy || !version) {
+    if (!s.azureEndpoint || !s.azureKey || !s.azureDeployment || !s.azureApiVersion) {
       return res.status(400).json({
         success: false,
-        error: "Azure OpenAI credentials are incomplete. Please save your settings first.",
+        error: "Azure OpenAI credentials are incomplete. Save your settings first.",
       });
     }
 
-    const url = `${endpoint}/openai/deployments/${deploy}/chat/completions?api-version=${version}`;
+    const url = `${s.azureEndpoint}/openai/deployments/${s.azureDeployment}/chat/completions?api-version=${s.azureApiVersion}`;
 
     const azureRes = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "api-key": apiKey,
-      },
+      headers: { "Content-Type": "application/json", "api-key": s.azureKey },
       body: JSON.stringify({
         messages: [
-          { role: "system", content: "You are a helpful assistant." },
-          { role: "user",   content: "Reply with exactly: CONNECTION_OK" },
+          { role: "user", content: "Reply with exactly: CONNECTION_OK" },
         ],
         max_completion_tokens: 20,
-        temperature: 0,
       }),
     });
 
@@ -123,16 +92,14 @@ router.post("/test", async (req, res) => {
       return res.status(400).json({ success: false, error: `Azure error: ${message}` });
     }
 
-    const data = await azureRes.json();
+    const data  = await azureRes.json();
     const reply = data?.choices?.[0]?.message?.content || "";
-
     res.json({
       success: true,
-      message: `Connection successful — model responded: "${reply.trim()}"`,
-      model: data?.model || deploy,
+      message: `Connection successful — model replied: "${reply.trim()}"`,
+      model: data?.model || s.azureDeployment,
     });
   } catch (err) {
-    console.error("POST /settings/test error:", err);
     res.status(500).json({ success: false, error: `Server error: ${err.message}` });
   }
 });
