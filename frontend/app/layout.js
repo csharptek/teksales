@@ -1,12 +1,14 @@
 export const metadata = {
-  title: "My App",
-  description: "Generated app",
+  title: "CSharpTek AI Proposal Generator",
+  description: "AI-powered sales proposal automation",
 };
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body style={{ margin: 0, padding: 0 }}>
+        {children}
+      </body>
     </html>
   );
 }
