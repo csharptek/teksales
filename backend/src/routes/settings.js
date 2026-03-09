@@ -112,7 +112,7 @@ router.post("/test", async (req, res) => {
           { role: "system", content: "You are a helpful assistant." },
           { role: "user",   content: "Reply with exactly: CONNECTION_OK" },
         ],
-        max_tokens: 20,
+        max_completion_tokens: 20,
         temperature: 0,
       }),
     });

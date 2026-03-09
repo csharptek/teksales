@@ -24,7 +24,7 @@ async function callAzure(systemPrompt, userMessage, s) {
         { role: "system", content: systemPrompt },
         { role: "user",   content: userMessage },
       ],
-      max_tokens: 2500,
+      max_completion_tokens: 2500,
       temperature: 0.4,
     }),
   });
